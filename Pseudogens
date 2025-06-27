@@ -1,3 +1,154 @@
+def calculate_pseudogens_optimized(self, reverse=False):
+    """
+    This is the current best algorithm!
+    """
+    import networkx as nx
+    
+    # —0— collect structures
+    g_dag     = self.og_graph_without_marrs
+    marriages = set(self.og_marriage_edges)
+    parents   = {v: list(g_dag.predecessors(v)) for v in g_dag.nodes()}
+    children  = {v: list(g_dag.successors(v))   for v in g_dag.nodes()}
+    
+    # —1— raw bottom‐up layering
+    G_raw = {v: 0 for v in g_dag.nodes()}
+    topo  = list(nx.topological_sort(g_dag))
+    for child in reversed(topo):
+        for p in parents[child]:
+            G_raw[p] = max(G_raw[p], G_raw[child] + 1)
+    
+    # —2— identify “immigrants”
+    rev            = g_dag.reverse(copy=False)
+    parentless     = {v for v, nbrs in rev.adj.items() if not nbrs}
+    self.parentless = parentless
+    
+    # —3— invert into gen‐space (0=oldest, ↑=younger)
+    if not reverse:
+        top_raw = max(G_raw.values(), default=0)
+        G = {v: top_raw - G_raw[v] for v in G_raw}
+    else:
+        G = dict(G_raw)
+    
+    # —4— PASS B: parentless‐spouse inheritance
+    for u, v in marriages:
+        if u in parentless:
+            G[u] = G[v]
+        if v in parentless:
+            G[v] = G[u]
+    
+    # —5— PASS C: enforce child = max(parent) + 1
+    for v in g_dag.nodes():
+        if parents[v]:
+            G[v] = max(G[p] for p in parents[v]) + 1
+    
+    # —6— densify to 0,1,2,… with no gaps
+    layers = sorted(set(G.values()))
+    remap  = {old: new for new, old in enumerate(layers)}
+    dense  = {v: remap[G[v]] for v in G}
+    
+    # —6— PASS D: linear densify (bucket‐sort style)
+    # nodes   = list(G.keys())
+    # raw_min = min(G[v] for v in nodes)
+    # raw_max = max(G[v] for v in nodes)
+    # R       = raw_max - raw_min + 1
+    
+    # buckets = [[] for _ in range(R)]
+    # for v in nodes:
+    #     buckets[G[v] - raw_min].append(v)
+    
+    # dense = {}
+    # gen   = 0
+    # for bucket in buckets:
+    #     if not bucket:
+    #         continue
+    #     for v in bucket:
+    #         dense[v] = gen
+    #     gen += 1
+    
+    # —7— PASS D: immigrant‐spouse cleanup
+    for u, v in marriages:
+        if u in parentless:
+            dense[u] = dense[v]
+        if v in parentless:
+            dense[v] = dense[u]
+    
+    # —8— PASS E: component bottom‐leaf alignment
+    #    Lift each undirected component so its deepest leaf = global max
+    global_max = max(dense.values(), default=0)
+    for comp in nx.connected_components(g_dag.to_undirected()):
+        # find leaves (childless nodes) in this comp
+        leaves = [v for v in comp if not children[v]]
+        if not leaves:
+            continue
+        comp_max = max(dense[v] for v in leaves)
+        shift    = global_max - comp_max
+        if shift:
+            for w in comp:
+                dense[w] += shift
+    
+    # —7— PASS D: immigrant‐spouse cleanup
+    for u, v in marriages:
+        if u in parentless:
+            dense[u] = dense[v]
+        if v in parentless:
+            dense[v] = dense[u]
+    
+    # —9— save & return
+    self.node_to_gen = dense
+    self.final_gen   = max(dense.values(), default=0)
+    return dense
+
+
+
+from get_model_parameters import get_names
+def test_all_networks_for_suitability():
+    actual = []
+    names = get_names()
+    for i in range(len(names)):
+        names[i] = names[i][30:-13]
+    processed_num = 0
+    for name in names:
+        print(f"\n--- Processing {name} ---\nTotal Completed:  {processed_num}/{len(names)}")
+        processed_num += 1
+        try:
+            pop = Model(name, two_sided_dist=True)
+            print("✅ Success")
+        except Exception as e:
+            # Print exception type, message, and full traceback
+            print(f"❗ {type(e).__name__} in {name}: {e}")
+            actual.append(name)
+            # print(traceback.format_exc())
+            # Continue to next dataset
+            continue
+
+    print(f"actual:  {actual}")
+    print(f"{len(actual)}/{len(names)}")
+
+def visualize_networks():
+    from get_model_parameters import get_names
+    names = get_names()
+
+    # Best two networks.
+    pop = Model('family', intergen=False, two_sided_dist=False, experiment=True, vis=True)
+    pop = Model('dogon-konsogu-donyu', intergen=False, two_sided_dist=False, experiment=True, vis=True)
+
+    # First three in this list iteration do not have cycles (the fourth does).
+    # The first network is the same one I sent in the Discord (the image with clean lineages depicted).
+    for i in range(1, len(names)):
+        names[i] = names[i][30:-13]
+        pop = Model(names[i], intergen=False, two_sided_dist=False, experiment=True, vis=True)
+
+
+test_all_networks_for_suitability()
+visualize_networks()
+
+
+
+
+
+
+########## PREVIOUS VERSIONS ###########
+
  def calculate_pseudogens_optimized(self, reverse=False):
         """
         Nearly perfect implementation with constraints aligned to ensure nodes in a union (with children) are always in
@@ -256,47 +407,3 @@ def calculate_pseudogens_optimized(self, reverse=False):
         self.parentless = {v for v, nbrs in reverse_dag.adj.items() if not nbrs}
 
         return dense
-
-
-
-from get_model_parameters import get_names
-def test_all_networks_for_suitability():
-    actual = []
-    names = get_names()
-    for i in range(len(names)):
-        names[i] = names[i][30:-13]
-    processed_num = 0
-    for name in names:
-        print(f"\n--- Processing {name} ---\nTotal Completed:  {processed_num}/{len(names)}")
-        processed_num += 1
-        try:
-            pop = Model(name, two_sided_dist=True)
-            print("✅ Success")
-        except Exception as e:
-            # Print exception type, message, and full traceback
-            print(f"❗ {type(e).__name__} in {name}: {e}")
-            actual.append(name)
-            # print(traceback.format_exc())
-            # Continue to next dataset
-            continue
-
-    print(f"actual:  {actual}")
-    print(f"{len(actual)}/{len(names)}")
-
-def visualize_networks():
-    from get_model_parameters import get_names
-    names = get_names()
-
-    # Best two networks.
-    pop = Model('family', intergen=False, two_sided_dist=False, experiment=True, vis=True)
-    pop = Model('dogon-konsogu-donyu', intergen=False, two_sided_dist=False, experiment=True, vis=True)
-
-    # First three in this list iteration do not have cycles (the fourth does).
-    # The first network is the same one I sent in the Discord (the image with clean lineages depicted).
-    for i in range(1, len(names)):
-        names[i] = names[i][30:-13]
-        pop = Model(names[i], intergen=False, two_sided_dist=False, experiment=True, vis=True)
-
-
-test_all_networks_for_suitability()
-visualize_networks()
